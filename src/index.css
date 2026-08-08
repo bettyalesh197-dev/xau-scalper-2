@@ -1,0 +1,44 @@
+:root {
+  --bg: #0b0d10;
+  --panel: #14171c;
+  --panel-border: #23272e;
+  --text: #e8e6e1;
+  --text-muted: #7a8087;
+  --gold: #c9a24b;
+  --gold-dim: #8a7130;
+  --buy: #3fb950;
+  --buy-bg: rgba(63, 185, 80, 0.1);
+  --sell: #f0564b;
+  --sell-bg: rgba(240, 86, 75, 0.1);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
