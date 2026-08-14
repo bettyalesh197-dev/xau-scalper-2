@@ -11,13 +11,18 @@ import StatBadge from "./components/StatBadge.jsx";
 
 const POLL_MS = 10000;
 const ENDPOINT = "/.netlify/functions/signal";
+const MAX_FILTERED_HISTORY = 20;
 
 export default function App() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [lastPrice, setLastPrice] = useState(null);
-  const [tick, setTick] = useState(null);
+  const [tick, setTick] = useState(null); // "up" | "down" | null
+  const [filteredHistory, setFilteredHistory] = useState([]);
+  const [showFiltered, setShowFiltered] = useState(false);
+  const [counts, setCounts] = useState({ emitted: 0, filtered: 0 });
   const prevPriceRef = useRef(null);
+  const lastFilteredKeyRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -33,6 +38,7 @@ export default function App() {
         }
         setError(null);
         setData(json);
+
         const price = json.indicators?.price;
         if (price != null) {
           if (prevPriceRef.current != null) {
@@ -40,6 +46,30 @@ export default function App() {
           }
           prevPriceRef.current = price;
           setLastPrice(price);
+        }
+
+        if (json.signal) {
+          setCounts((c) => ({ ...c, emitted: c.emitted + 1 }));
+        }
+
+        if (json.filtered) {
+          // Évite de compter/afficher plusieurs fois le même signal filtré
+          // s'il reste actif sur plusieurs cycles de poll consécutifs.
+          const key = `${json.indicators?.time}-${json.filtered.side}-${json.filtered.reason}`;
+          if (lastFilteredKeyRef.current !== key) {
+            lastFilteredKeyRef.current = key;
+            setCounts((c) => ({ ...c, filtered: c.filtered + 1 }));
+            setFilteredHistory((h) =>
+              [
+                {
+                  time: json.indicators?.time,
+                  side: json.filtered.side,
+                  reason: json.filtered.reason
+                },
+                ...h
+              ].slice(0, MAX_FILTERED_HISTORY)
+            );
+          }
         }
       } catch (e) {
         if (!cancelled) setError(e.message);
@@ -53,6 +83,8 @@ export default function App() {
       clearInterval(id);
     };
   }, []);
+
+  const trending = data?.indicators?.trending;
 
   return (
     <div style={styles.page}>
@@ -75,6 +107,15 @@ export default function App() {
       </header>
 
       {error && <div style={styles.error}>⚠ {error}</div>}
+
+      {trending && (
+        <div style={styles.trendBanner}>
+          ⏸ Marché en tendance forte — signaux de retournement suspendus
+          {data.indicators?.emaSpreadInAtr != null && (
+            <span style={styles.trendDetail}> (écart EMA : {data.indicators.emaSpreadInAtr}x ATR)</span>
+          )}
+        </div>
+      )}
 
       {data && (
         <>
@@ -107,6 +148,46 @@ export default function App() {
           </div>
 
           <SignalCard signal={data.signal} />
+
+          <div style={styles.filteredSection}>
+            <button
+              type="button"
+              onClick={() => setShowFiltered((s) => !s)}
+              style={styles.filteredToggle}
+            >
+              <span>
+                Signaux filtrés{" "}
+                <span style={styles.countPill}>
+                  {counts.filtered} filtrés · {counts.emitted} émis
+                </span>
+              </span>
+              <span>{showFiltered ? "▲" : "▼"}</span>
+            </button>
+
+            {showFiltered && (
+              <div style={styles.filteredList}>
+                {filteredHistory.length === 0 && (
+                  <div style={styles.filteredEmpty}>Aucun signal filtré pour l'instant.</div>
+                )}
+                {filteredHistory.map((f, i) => (
+                  <div key={i} style={styles.filteredItem}>
+                    <span
+                      style={{
+                        ...styles.filteredSide,
+                        color: f.side === "BUY" ? "var(--buy)" : "var(--sell)"
+                      }}
+                    >
+                      {f.side}
+                    </span>
+                    <span style={styles.filteredReason}>{f.reason}</span>
+                    <span style={styles.filteredTime}>
+                      {f.time ? new Date(f.time).toLocaleTimeString() : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </>
       )}
 
@@ -120,16 +201,140 @@ export default function App() {
 }
 
 const styles = {
-  page: { minHeight: "100%", maxWidth: 480, margin: "0 auto", padding: "24px 16px 40px", display: "flex", flexDirection: "column", gap: 20 },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "flex-end" },
-  eyebrow: { fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-muted)" },
-  title: { margin: "4px 0 0", fontSize: 26, fontFamily: "var(--font-mono)", color: "var(--gold)", letterSpacing: "0.02em" },
-  priceBlock: { textAlign: "right" },
-  price: { fontFamily: "var(--font-mono)", fontSize: 32, fontWeight: 600, transition: "color 300ms ease" },
-  priceUnit: { fontSize: 12, color: "var(--text-muted)", marginLeft: 4 },
-  chartWrap: { background: "var(--panel)", border: "1px solid var(--panel-border)", borderRadius: 12, padding: "8px 4px" },
-  statsRow: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
-  loading: { color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 14 },
-  error: { background: "var(--sell-bg)", border: "1px solid var(--sell)", color: "var(--sell)", borderRadius: 10, padding: "10px 12px", fontSize: 13 },
-  footer: { marginTop: 8, fontSize: 11, color: "var(--text-muted)", textAlign: "center", lineHeight: 1.5 }
+  page: {
+    minHeight: "100%",
+    maxWidth: 480,
+    margin: "0 auto",
+    padding: "24px 16px 40px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 20
+  },
+  header: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-end"
+  },
+  eyebrow: {
+    fontSize: 12,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: "var(--text-muted)"
+  },
+  title: {
+    margin: "4px 0 0",
+    fontSize: 26,
+    fontFamily: "var(--font-mono)",
+    color: "var(--gold)",
+    letterSpacing: "0.02em"
+  },
+  priceBlock: {
+    textAlign: "right"
+  },
+  price: {
+    fontFamily: "var(--font-mono)",
+    fontSize: 32,
+    fontWeight: 600,
+    transition: "color 300ms ease"
+  },
+  priceUnit: {
+    fontSize: 12,
+    color: "var(--text-muted)",
+    marginLeft: 4
+  },
+  chartWrap: {
+    background: "var(--panel)",
+    border: "1px solid var(--panel-border)",
+    borderRadius: 12,
+    padding: "8px 4px"
+  },
+  statsRow: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 10
+  },
+  trendBanner: {
+    background: "var(--panel)",
+    border: "1px solid var(--gold)",
+    color: "var(--gold)",
+    borderRadius: 10,
+    padding: "8px 12px",
+    fontSize: 12,
+    lineHeight: 1.4
+  },
+  trendDetail: {
+    color: "var(--text-muted)"
+  },
+  loading: {
+    color: "var(--text-muted)",
+    fontFamily: "var(--font-mono)",
+    fontSize: 14
+  },
+  error: {
+    background: "var(--sell-bg)",
+    border: "1px solid var(--sell)",
+    color: "var(--sell)",
+    borderRadius: 10,
+    padding: "10px 12px",
+    fontSize: 13
+  },
+  filteredSection: {
+    border: "1px solid var(--panel-border)",
+    borderRadius: 12,
+    overflow: "hidden"
+  },
+  filteredToggle: {
+    width: "100%",
+    background: "var(--panel)",
+    border: "none",
+    color: "var(--text)",
+    padding: "10px 12px",
+    fontSize: 13,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    cursor: "pointer"
+  },
+  countPill: {
+    fontSize: 11,
+    color: "var(--text-muted)",
+    marginLeft: 6
+  },
+  filteredList: {
+    display: "flex",
+    flexDirection: "column",
+    maxHeight: 220,
+    overflowY: "auto"
+  },
+  filteredEmpty: {
+    padding: "10px 12px",
+    fontSize: 12,
+    color: "var(--text-muted)"
+  },
+  filteredItem: {
+    display: "grid",
+    gridTemplateColumns: "50px 1fr auto",
+    gap: 8,
+    padding: "8px 12px",
+    fontSize: 12,
+    borderTop: "1px solid var(--panel-border)"
+  },
+  filteredSide: {
+    fontWeight: 700,
+    fontFamily: "var(--font-mono)"
+  },
+  filteredReason: {
+    color: "var(--text-muted)"
+  },
+  filteredTime: {
+    color: "var(--text-muted)",
+    fontFamily: "var(--font-mono)"
+  },
+  footer: {
+    marginTop: 8,
+    fontSize: 11,
+    color: "var(--text-muted)",
+    textAlign: "center",
+    lineHeight: 1.5
+  }
 };
