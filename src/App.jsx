@@ -8,8 +8,10 @@ import {
 } from "recharts";
 import SignalCard from "./components/SignalCard.jsx";
 import StatBadge from "./components/StatBadge.jsx";
+import { useLivePrice } from "./useLivePrice.js";
 
 const POLL_MS = 45000;
+const LIVE_PRICE_MS = 2000;
 const ENDPOINT = "/.netlify/functions/signal";
 const MAX_FILTERED_HISTORY = 20;
 
@@ -21,8 +23,22 @@ export default function App() {
   const [filteredHistory, setFilteredHistory] = useState([]);
   const [showFiltered, setShowFiltered] = useState(false);
   const [counts, setCounts] = useState({ emitted: 0, filtered: 0 });
-  const prevPriceRef = useRef(null);
+  const prevLiveRef = useRef(null);
   const lastFilteredKeyRef = useRef(null);
+
+  // Prix live bid/ask (rafraîchi toutes les 2 s)
+  const live = useLivePrice(LIVE_PRICE_MS);
+
+  // Couleur du prix : monte / descend
+  useEffect(() => {
+    if (live?.bid == null) return;
+    if (prevLiveRef.current != null) {
+      setTick(
+        live.bid > prevLiveRef.current ? "up" : live.bid < prevLiveRef.current ? "down" : null
+      );
+    }
+    prevLiveRef.current = live.bid;
+  }, [live]);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,10 +57,6 @@ export default function App() {
 
         const price = json.indicators?.price;
         if (price != null) {
-          if (prevPriceRef.current != null) {
-            setTick(price > prevPriceRef.current ? "up" : price < prevPriceRef.current ? "down" : null);
-          }
-          prevPriceRef.current = price;
           setLastPrice(price);
         }
 
@@ -84,6 +96,9 @@ export default function App() {
 
   const trending = data?.indicators?.trending;
 
+  // Prix affiché : bid live si disponible, sinon dernière clôture M1
+  const displayPrice = live?.bid != null ? live.bid : lastPrice;
+
   return (
     <div style={styles.page}>
       <header style={styles.header}>
@@ -98,9 +113,14 @@ export default function App() {
               color: tick === "up" ? "var(--buy)" : tick === "down" ? "var(--sell)" : "var(--text)"
             }}
           >
-            {lastPrice != null ? lastPrice.toFixed(2) : "—"}
+            {displayPrice != null ? displayPrice.toFixed(2) : "—"}
           </span>
           <span style={styles.priceUnit}>USD</span>
+          {live && (
+            <div style={styles.bidAsk}>
+              Bid {live.bid.toFixed(2)} · Ask {live.ask.toFixed(2)} · Spread {live.spread.toFixed(2)}
+            </div>
+          )}
         </div>
       </header>
 
@@ -192,7 +212,7 @@ export default function App() {
       {!data && !error && <div style={styles.loading}>Connexion au flux OANDA…</div>}
 
       <footer style={styles.footer}>
-        Bougies M1 · rafraîchi toutes les {POLL_MS / 1000}s · Compte practice OANDA — pas d'exécution automatique.
+        Prix live bid/ask · signaux M1 rafraîchis toutes les {POLL_MS / 1000}s · Compte practice OANDA — pas d'exécution automatique.
       </footer>
     </div>
   );
@@ -239,6 +259,12 @@ const styles = {
     fontSize: 12,
     color: "var(--text-muted)",
     marginLeft: 4
+  },
+  bidAsk: {
+    marginTop: 2,
+    fontSize: 11,
+    fontFamily: "var(--font-mono)",
+    color: "var(--text-muted)"
   },
   chartWrap: {
     background: "var(--panel)",
