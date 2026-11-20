@@ -6,6 +6,9 @@
 // signal d'entrée avec SL + 2 TP, soit `null` si aucune configuration
 // valide n'est présente sur la dernière bougie.
 //
+// MODIF : le prix d'entrée utilise maintenant le prix live (ask pour BUY,
+// bid pour SELL) au lieu de la clôture de la dernière bougie M1 terminée.
+//
 // Variables d'environnement à définir sur Netlify :
 //   OANDA_API_KEY   -> ton token d'accès (compte practice/démo)
 //   OANDA_ENV       -> "practice" (défaut) ou "live"
@@ -39,8 +42,11 @@ function oandaBaseUrl() {
     : "https://api-fxpractice.oanda.com";
 }
 
+// MODIF : price=MBA renvoie mid + bid + ask. On garde les bougies terminées
+// pour les indicateurs, et la toute dernière bougie (même en cours) donne
+// le prix live bid/ask.
 async function fetchCandles() {
-  const url = `${oandaBaseUrl()}/v3/instruments/${INSTRUMENT}/candles?granularity=${GRANULARITY}&count=${CANDLE_COUNT}&price=M`;
+  const url = `${oandaBaseUrl()}/v3/instruments/${INSTRUMENT}/candles?granularity=${GRANULARITY}&count=${CANDLE_COUNT}&price=MBA`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${process.env.OANDA_API_KEY}` }
   });
@@ -49,7 +55,8 @@ async function fetchCandles() {
     throw new Error(`OANDA ${res.status}: ${body}`);
   }
   const data = await res.json();
-  return data.candles
+
+  const candles = data.candles
     .filter((c) => c.complete)
     .map((c) => ({
       time: c.time,
@@ -58,6 +65,18 @@ async function fetchCandles() {
       low: parseFloat(c.mid.l),
       close: parseFloat(c.mid.c)
     }));
+
+  const lastAny = data.candles[data.candles.length - 1];
+  const live =
+    lastAny && lastAny.bid && lastAny.ask
+      ? {
+          bid: parseFloat(lastAny.bid.c),
+          ask: parseFloat(lastAny.ask.c),
+          time: lastAny.time
+        }
+      : null;
+
+  return { candles, live };
 }
 
 function computeRSI(candles, period) {
@@ -190,7 +209,7 @@ function isBlockedBySameDirection(state, side, now) {
   return { blocked: false };
 }
 
-function buildSignal(candles, state, now) {
+function buildSignal(candles, state, now, live) {
   const last = candles[candles.length - 1];
   const price = last.close;
   const rsi = computeRSI(candles, RSI_PERIOD);
@@ -271,7 +290,9 @@ function buildSignal(candles, state, now) {
   }
 
   const direction = side === "BUY" ? 1 : -1;
-  const entry = price;
+  // MODIF : entrée au prix réel d'exécution (ask pour BUY, bid pour SELL).
+  // Si le prix live est indisponible, on retombe sur l'ancienne clôture M1.
+  const entry = live ? (side === "BUY" ? live.ask : live.bid) : price;
   const sl = entry - direction * atr;
   const tp1 = entry + direction * atr;
   const tp2 = entry + direction * atr * 2;
@@ -299,7 +320,7 @@ export default async function handler() {
         { status: 500, headers: { "Content-Type": "application/json" } }
       );
     }
-    const candles = await fetchCandles();
+    const { candles, live } = await fetchCandles();
     const MIN_CORE_CANDLES = Math.max(RSI_PERIOD, ATR_PERIOD) + PIVOT_LOOKBACK + 1;
     if (candles.length < MIN_CORE_CANDLES) {
       return new Response(
@@ -314,7 +335,7 @@ export default async function handler() {
 
     const now = Date.now();
     const state = await getState();
-    const result = buildSignal(candles, state, now);
+    const result = buildSignal(candles, state, now, live);
 
     if (result.signal) {
       await saveState({
@@ -328,9 +349,13 @@ export default async function handler() {
         instrument: INSTRUMENT,
         granularity: GRANULARITY,
         candles: candles.slice(-60),
+        live,
         ...result
       }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
+      }
     );
   } catch (err) {
     return new Response(JSON.stringify({ error: err.message }), {
